@@ -12,44 +12,78 @@ load_dotenv()
 # 初始化OpenAI客户端
 client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
-def download_youtube_video(url, output_path="."):
+def download_youtube_video(url, output_path=".", cookies_file=None, audio_only=False):
     """
-    使用yt-dlp下载YouTube视频
+    使用yt-dlp下载视频或音频
     
     参数:
-        url (str): YouTube视频URL
+        url (str): 视频URL
         output_path (str): 输出目录路径
+        cookies_file (str): cookies文件路径
+        audio_only (bool): 是否只下载音频
     
     返回:
-        str: 下载的视频文件路径
+        str: 下载的文件路径
     """
     try:
-        print(f"正在下载视频: {url}")
+        print(f"正在下载{'音频' if audio_only else '视频'}: {url}")
         
         if not os.path.exists(output_path):
             os.makedirs(output_path)
         
         # 设置yt-dlp选项
         ydl_opts = {
-            'format': 'best[ext=mp4]',
+            'format': 'bestaudio/best' if audio_only else 'best[ext=mp4]',
             'outtmpl': os.path.join(output_path, '%(title)s.%(ext)s'),
             'quiet': False,
             'no_warnings': False,
             'socket_timeout': 60,  # 增加超时时间到60秒
             'retries': 10,         # 增加重试次数
-            'fragment_retries': 10 # 增加片段重试次数
+            'fragment_retries': 10, # 增加片段重试次数
+            'extract_flat': True,  # 提取扁平化信息
+            'extract_flat_in_playlist': True,  # 在播放列表中提取扁平化信息
+            'format_sort': ['res', 'fps', 'codec', 'size', 'br', 'asr', 'ext'],  # 格式排序
+            'prefer_free_formats': True,  # 优先选择免费格式
+            'merge_output_format': 'mp3' if audio_only else 'mp4',  # 合并输出格式
+            'postprocessors': [{
+                'key': 'FFmpegVideoConvertor',
+                'preferedformat': 'mp3' if audio_only else 'mp4',
+            }],
         }
         
-        # 下载视频
+        # 如果提供了cookies文件，添加到选项中
+        if cookies_file and os.path.exists(cookies_file):
+            ydl_opts['cookiefile'] = cookies_file
+            print(f"使用cookies文件: {cookies_file}")
+        
+        # 如果是B站视频，添加特定的选项
+        if 'bilibili.com' in url:
+            if audio_only:
+                ydl_opts.update({
+                    'format': '30280',  # 最高质量音频
+                    'extract_flat': True,
+                    'extract_flat_in_playlist': True,
+                    'merge_output_format': 'mp3',
+                    'postprocessors': [{
+                        'key': 'FFmpegVideoConvertor',
+                        'preferedformat': 'mp3',
+                    }],
+                })
+            else:
+                ydl_opts.update({
+                    'format': '100048+30280',  # 720p视频 + 最高质量音频
+                })
+        
+        # 下载文件
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             info = ydl.extract_info(url, download=True)
-            video_file = ydl.prepare_filename(info)
+            file_path = ydl.prepare_filename(info)
         
-        print(f"视频已下载到: {video_file}")
-        return video_file
+        print(f"{'音频' if audio_only else '视频'}已下载到: {file_path}")
+        return file_path
     
     except Exception as e:
-        print(f"下载视频时出错: {e}")
+        print(f"下载{'音频' if audio_only else '视频'}时出错: {e}")
         return None
 
 def extract_audio(video_file, output_path="."):
@@ -286,30 +320,34 @@ def transcribe_audio(audio_file, output_path="."):
         return None
 
 def main():
-    parser = argparse.ArgumentParser(description="下载YouTube视频并转录为文本")
-    parser.add_argument("url", help="YouTube视频URL")
+    parser = argparse.ArgumentParser(description="下载视频/音频并转录为文本")
+    parser.add_argument("url", help="视频URL")
     parser.add_argument("--output", "-o", default="output", help="输出目录路径")
     parser.add_argument("--segment-length", "-s", type=int, default=600, help="音频分段长度（秒），默认为600秒（10分钟）")
+    parser.add_argument("--cookies", "-c", help="cookies文件路径")
+    parser.add_argument("--audio-only", "-a", action="store_true", help="只下载音频")
     args = parser.parse_args()
     
-    # 下载视频
-    video_file = download_youtube_video(args.url, args.output)
-    if not video_file:
+    # 下载视频/音频
+    file_path = download_youtube_video(args.url, args.output, args.cookies, args.audio_only)
+    if not file_path:
         return
     
-    # 提取音频
-    audio_file = extract_audio(video_file, args.output)
-    if not audio_file:
-        return
+    if args.audio_only:
+        # 如果只下载音频，直接进行转录
+        text_file = transcribe_audio(file_path, args.output)
+    else:
+        # 如果下载了视频，先提取音频再转录
+        audio_file = extract_audio(file_path, args.output)
+        if not audio_file:
+            return
+        text_file = transcribe_audio(audio_file, args.output)
     
-    # 转录音频
-    text_file = transcribe_audio(audio_file, args.output)
     if not text_file:
         return
     
     print("处理完成!")
-    print(f"视频: {video_file}")
-    print(f"音频: {audio_file}")
+    print(f"{'音频' if args.audio_only else '视频'}: {file_path}")
     print(f"文本: {text_file}")
 
 if __name__ == "__main__":
