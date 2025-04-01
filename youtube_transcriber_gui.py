@@ -234,25 +234,51 @@ class YouTubeTranscriberGUI:
             file_path = download_youtube_video(url, output_path, cookies_file, audio_only)
             if not file_path:
                 self.update_status("下载失败", 0)
+                self.log_message("错误: 无法下载视频/音频，请检查URL是否正确和网络连接")
                 return
+            
+            # 验证文件是否存在
+            if not os.path.exists(file_path):
+                self.update_status("下载文件不存在", 0)
+                self.log_message(f"错误: 下载完成但文件不存在: {file_path}")
+                return
+                
+            self.log_message(f"成功下载到: {file_path}")
             
             if audio_only:
                 # 直接转录音频
                 self.update_status("正在转录音频...", 50)
+                self.log_message("开始转录下载的音频...")
                 text_file = transcribe_audio(file_path, output_path)
             else:
                 # 提取音频并转录
                 self.update_status("正在提取音频...", 30)
+                self.log_message("从视频中提取音频...")
                 audio_file = extract_audio(file_path, output_path)
                 if not audio_file:
                     self.update_status("提取音频失败", 0)
+                    self.log_message("错误: 无法从视频中提取音频")
+                    return
+                
+                # 验证音频文件是否存在
+                if not os.path.exists(audio_file):
+                    self.update_status("音频文件不存在", 0)
+                    self.log_message(f"错误: 提取完成但音频文件不存在: {audio_file}")
                     return
                 
                 self.update_status("正在转录音频...", 50)
+                self.log_message(f"开始转录音频: {audio_file}")
                 text_file = transcribe_audio(audio_file, output_path)
             
             if not text_file:
                 self.update_status("转录失败", 0)
+                self.log_message("错误: 无法完成音频转录，请检查OpenAI API密钥和配置")
+                return
+            
+            # 验证转录文件是否存在
+            if not os.path.exists(text_file):
+                self.update_status("转录文件不存在", 0)
+                self.log_message(f"错误: 转录完成但文本文件不存在: {text_file}")
                 return
             
             # 完成
@@ -266,6 +292,7 @@ class YouTubeTranscriberGUI:
         except Exception as e:
             error_msg = f"处理过程中出错: {str(e)}"
             self.log_message(error_msg)
+            self.log_message(f"异常详情: {e.__class__.__name__}")
             self.update_status("处理失败", 0)
             self.root.after(0, lambda: messagebox.showerror("错误", error_msg))
         

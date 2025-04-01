@@ -44,12 +44,23 @@ def download_youtube_video(url, output_path=".", cookies_file=None, audio_only=F
             'extract_flat_in_playlist': True,  # 在播放列表中提取扁平化信息
             'format_sort': ['res', 'fps', 'codec', 'size', 'br', 'asr', 'ext'],  # 格式排序
             'prefer_free_formats': True,  # 优先选择免费格式
-            'merge_output_format': 'mp3' if audio_only else 'mp4',  # 合并输出格式
-            'postprocessors': [{
-                'key': 'FFmpegVideoConvertor',
-                'preferedformat': 'mp3' if audio_only else 'mp4',
-            }],
         }
+        
+        # 添加后处理器
+        if audio_only:
+            ydl_opts.update({
+                'postprocessors': [{
+                    'key': 'FFmpegExtractAudio',
+                    'preferredcodec': 'mp3',
+                    'preferredquality': '192',
+                }],
+            })
+            expected_ext = 'mp3'
+        else:
+            ydl_opts.update({
+                'merge_output_format': 'mp4',
+            })
+            expected_ext = 'mp4'
         
         # 如果提供了cookies文件，添加到选项中
         if cookies_file and os.path.exists(cookies_file):
@@ -61,13 +72,6 @@ def download_youtube_video(url, output_path=".", cookies_file=None, audio_only=F
             if audio_only:
                 ydl_opts.update({
                     'format': '30280',  # 最高质量音频
-                    'extract_flat': True,
-                    'extract_flat_in_playlist': True,
-                    'merge_output_format': 'mp3',
-                    'postprocessors': [{
-                        'key': 'FFmpegVideoConvertor',
-                        'preferedformat': 'mp3',
-                    }],
                 })
             else:
                 ydl_opts.update({
@@ -78,8 +82,32 @@ def download_youtube_video(url, output_path=".", cookies_file=None, audio_only=F
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             info = ydl.extract_info(url, download=True)
             file_path = ydl.prepare_filename(info)
+            
+            # 修正文件扩展名
+            if audio_only and not file_path.endswith('.mp3'):
+                base_path = os.path.splitext(file_path)[0]
+                file_path = f"{base_path}.{expected_ext}"
+            
+            # 确保文件存在
+            if not os.path.exists(file_path):
+                # 尝试查找实际文件
+                base_path = os.path.splitext(file_path)[0]
+                possible_paths = [
+                    f"{base_path}.{expected_ext}",
+                    f"{base_path}.{info.get('ext', expected_ext)}"
+                ]
+                
+                for possible_path in possible_paths:
+                    if os.path.exists(possible_path):
+                        file_path = possible_path
+                        break
         
         print(f"{'音频' if audio_only else '视频'}已下载到: {file_path}")
+        
+        # 再次确认文件是否存在
+        if not os.path.exists(file_path):
+            raise FileNotFoundError(f"下载完成，但找不到文件: {file_path}")
+            
         return file_path
     
     except Exception as e:
@@ -208,17 +236,25 @@ def transcribe_audio_segment(audio_file, output_path="."):
     try:
         print(f"正在转录音频片段: {audio_file}")
         
+        # 检查文件是否存在
+        if not os.path.exists(audio_file):
+            raise FileNotFoundError(f"音频文件不存在: {audio_file}")
+        
         # 打开音频文件
-        with open(audio_file, "rb") as audio:
+        with open(audio_file, "rb") as audio_data:
             # 使用OpenAI的Whisper API进行转录
             transcript = client.audio.transcriptions.create(
                 model="whisper-1",
-                file=audio,
-                response_format="verbose_json"  # 使用详细JSON格式获取更多信息
+                file=audio_data,
+                response_format="text"  # 改为纯文本格式简化处理
             )
         
-        # 返回转录文本
-        return transcript.text
+        # 由于response_format="text"，transcript是字符串，不需要再获取.text属性
+        if isinstance(transcript, str):
+            return transcript
+        else:
+            # 如果返回对象不是字符串，尝试获取text属性
+            return getattr(transcript, 'text', str(transcript))
     
     except Exception as e:
         print(f"转录音频片段时出错: {e}")
@@ -278,6 +314,10 @@ def transcribe_audio(audio_file, output_path="."):
     try:
         print(f"正在转录音频: {audio_file}")
         
+        # 检查音频文件是否存在
+        if not os.path.exists(audio_file):
+            raise FileNotFoundError(f"音频文件不存在: {audio_file}")
+        
         if not os.path.exists(output_path):
             os.makedirs(output_path)
         
@@ -292,7 +332,14 @@ def transcribe_audio(audio_file, output_path="."):
         transcript_parts = []
         for segment_file in segment_files:
             transcript_part = transcribe_audio_segment(segment_file, output_path)
-            transcript_parts.append(transcript_part)
+            if transcript_part:  # 确保转录内容不为空
+                transcript_parts.append(transcript_part)
+            else:
+                print(f"警告: 片段 {segment_file} 转录内容为空")
+        
+        # 检查是否有转录内容
+        if not transcript_parts:
+            raise ValueError(f"无法转录任何音频片段，请检查音频文件格式和OpenAI API配置")
         
         # 合并所有转录文本
         full_transcript = " ".join(transcript_parts)
