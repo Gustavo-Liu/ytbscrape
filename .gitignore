@@ -3,6 +3,10 @@
 
 # 不忽略Python文件
 !*.py
+# 不忽略requirements.txt文件
+!requirements.txt
+# 不忽略README.md文件
+!README.md
 
 # 忽略__pycache__目录
 __pycache__/
